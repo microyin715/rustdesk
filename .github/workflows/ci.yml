@@ -175,13 +175,6 @@ jobs:
         rustc -V
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-    - name: Build
-      uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1
-      with:
-        use-cross: ${{ matrix.job.use-cross }}
-        command: build
-        args: --locked --target=${{ matrix.job.target }}
-
     - name: Set testing options
       id: test-options
       shell: bash
@@ -202,26 +195,21 @@ jobs:
 
     - name: Build
       uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505
-       with:
+      with:
          use-cross: ${{ matrix.job.use-cross }}
          command: build
          args: --release --locked --target=${{ matrix.job.target }}
 
     - name: Prepare Release Files
-      if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-      shell: bash
-      run: |
-        mkdir release
-        cp target/${{ matrix.job.target }}/release/rustdesk release/
-        tar -czvf rustdesk-${{ matrix.job.target }}.tar.gz -C release .
+     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+     shell: bash
+     run: |
+       mkdir release
 
-    - name: Upload Release Asset
-      if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: build-${{ github.run_number }}
-        name: RustDesk Build ${{ github.run_number }}
-        files: |
-          rustdesk-${{ matrix.job.target }}.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+       if [[ "${{ matrix.job.target }}" == *"windows"* ]]; then
+        cp target/${{ matrix.job.target }}/release/rustdesk.exe release/
+       else
+         cp target/${{ matrix.job.target }}/release/rustdesk release/
+       fi
+
+       tar -czvf rustdesk-${{ matrix.job.target }}.tar.gz -C release .
