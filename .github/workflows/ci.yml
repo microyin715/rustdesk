@@ -65,7 +65,7 @@ jobs:
   #       command: test
   #       args: --locked
 
-    build:
+  build:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -105,7 +105,6 @@ jobs:
         script: |
           core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Checkout source code
       uses: actions/checkout@v5 # v4
       with:
@@ -144,7 +143,6 @@ jobs:
           # arm-unknown-linux-*) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf ;;
           # aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
         esac
-
     - name: Setup vcpkg with Github Actions binary cache
       uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
       with:
@@ -172,21 +170,19 @@ jobs:
         rustup default
         cargo -V
         rustc -V
-
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
     - name: Build
-      shell: bash
-      run: |
-        cargo build \
-        --locked \
-        --target=${{ matrix.job.target }}
+      uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1
+      with:
+        use-cross: ${{ matrix.job.use-cross }}
+        command: build
+        args: --locked --target=${{ matrix.job.target }}
 
     - name: clean
       shell: bash
       run: |
         cargo clean
-
     # - name: Strip debug information from executable
     #   id: strip
     #   shell: bash
@@ -229,7 +225,6 @@ jobs:
       run: |
         # test only library unit tests and binary for arm-type targets
         unset CARGO_TEST_OPTIONS
-
         case ${{ matrix.job.target }} in
           arm-* | aarch64-*)
             CARGO_TEST_OPTIONS="--lib --bin ${PROJECT_NAME}"
@@ -238,15 +233,12 @@ jobs:
             CARGO_TEST_OPTIONS="--workspace --no-fail-fast -- --skip test_get_cursor_pos --skip test_get_key_state"
             ;;
         esac;
-
         #deprecated echo ::set-output name=CARGO_TEST_OPTIONS::${CARGO_TEST_OPTIONS}
         echo "CARGO_TEST_OPTIONS=${CARGO_TEST_OPTIONS}" >> $GITHUB_ENV
         echo "CARGO_TEST_OPTIONS=${CARGO_TEST_OPTIONS}" >> $GITHUB_OUTPUT
-
     - name: Run tests
-     shell: bash
-     run: |
-       cargo test \
-         --locked \
-         --target=${{ matrix.job.target }} \
-         ${{ steps.test-options.outputs.CARGO_TEST_OPTIONS }}
+      uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1
+      with:
+        use-cross: ${{ matrix.job.use-cross }}
+        command: test
+        args: --locked --target=${{ matrix.job.target }} ${{ steps.test-options.outputs.CARGO_TEST_OPTIONS}}
