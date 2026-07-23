@@ -1,11 +1,8 @@
 name: Build RustDesk Minimal Windows/Android/Mac
 on:
-  # 仅保留手动触发，如需推送自动编译可取消下方push注释
-  workflow_dispatch:
-# push:
-#   branches: [ main ]
+  workflow_dispatch
 
-# 全局环境：自动读取仓库Secrets & Variables，Node24兼容、mac tap兼容
+# 全局环境：Node24兼容、mac tap兼容、自定义服务变量
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
@@ -26,8 +23,7 @@ env:
   ARMV7_VCPKG_COMMIT_ID: "6f29f12e82a8293156836ad81cc9bf5af41fe836"
   VERSION: "1.4.9"
   NDK_VERSION: "r28c"
-  # ========== 仓库配置自动加载变量（Settings-Actions Variables/Secrets）==========
-  # 签名密钥类（Secrets分类存储）
+  # 仓库后台配置变量自动读取
   ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
   ANDROID_ALIAS: ${{ secrets.ANDROID_ALIAS }}
   ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
@@ -38,12 +34,10 @@ env:
   MACOS_NOTARIZE_JSON: ${{ secrets.MACOS_NOTARIZE_JSON }}
   SIGN_BASE_URL: ${{ secrets.SIGN_BASE_URL }}
   SIGN_SECRET_KEY: ${{ secrets.SIGN_SECRET_KEY }}
-  # 自定义服务器公共变量（Variables分类存储）
   API_SERVER: ${{ vars.API_SERVER }}
   RELAY_SERVER: ${{ vars.RELAY_SERVER }}
   RENDEZVOUS_SERVER: ${{ vars.RENDEZVOUS_SERVER }}
   RS_PUB_KEY: ${{ vars.RS_PUB_KEY }}
-  # 编译控制开关（可在仓库Variables修改true/false）
   UPLOAD_ARTIFACT: ${{ vars.UPLOAD_ARTIFACT != 'false' }}
 
 jobs:
@@ -73,11 +67,11 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Restore bridge artifact
-        uses: actions/download-artifact@v9
+        uses: actions/download-artifact@v4
         with:
           name: bridge-artifact-flutter-3.44
           path: ./
@@ -106,13 +100,27 @@ jobs:
       - name: Patch Flutter 3.44 source
         shell: bash
         run: bash .github/patches/apply_flutter_3.44_source_patches.sh
+      - name: 替换自定义服务器配置(Windows)
+        shell: pwsh
+        run: |
+          if (-not [string]::IsNullOrEmpty("$env:API_SERVER")) {
+            (Get-Content flutter/lib/constants.dart) -replace 'api.rustdesk.com', "$env:API_SERVER" `
+            -replace 'relay.rustdesk.com', "$env:RELAY_SERVER" `
+            -replace 'rendezvous.rustdesk.com', "$env:RENDEZVOUS_SERVER" `
+            -replace 'RS_DEFAULT_PUB_KEY = ".*"', "RS_DEFAULT_PUB_KEY = `"$env:RS_PUB_KEY`"" | Set-Content flutter/lib/constants
+
+            (Get-Content src/hbb_common/config.rs) -replace 'api.rustdesk.com', "$env:API_SERVER" `
+            -replace 'relay.rustdesk.com', "$env:RELAY_SERVER" `
+            -replace 'rendezvous.rustdesk.com', "$env:RENDEZVOUS_SERVER" `
+            -replace 'pub_key: ".*"', "pub_key: `"$env:RS_PUB_KEY`"" | Set-Content src/hbb_common/config.rs
+          }
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.SCITER_RUST_VERSION }}
           targets: ${{ matrix.job.target }}
           components: rustfmt
-      - name: Rust Cache (缓存失败不中断)
+      - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
@@ -147,7 +155,7 @@ jobs:
           mv -Force .\usbmmidd_v2 ./rustdesk
       - name: Upload unsigned artifact
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: actions/upload-artifact@v9
+        uses: actions/upload-artifact@v4
         with:
           name: rustdesk-unsigned-windows-aarch64
           path: rustdesk
@@ -216,7 +224,7 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Install 32bit LLVM
@@ -250,6 +258,20 @@ jobs:
             find $VCPKG_ROOT -name "*.log" -exec cat {} \;
             exit 1
           fi
+      - name: 替换自定义服务器配置(Windows)
+        shell: pwsh
+        run: |
+          if (-not [string]::IsNullOrEmpty("$env:API_SERVER")) {
+            (Get-Content flutter/lib/constants.dart) -replace 'api.rustdesk.com', "$env:API_SERVER" `
+            -replace 'relay.rustdesk.com', "$env:RELAY_SERVER" `
+            -replace 'rendezvous.rustdesk.com', "$env:RENDEZVOUS_SERVER" `
+            -replace 'RS_DEFAULT_PUB_KEY = ".*"', "RS_DEFAULT_PUB_KEY = `"$env:RS_PUB_KEY`"" | Set-Content flutter/lib/constants
+
+            (Get-Content src/hbb_common/config.rs) -replace 'api.rustdesk.com', "$env:API_SERVER" `
+            -replace 'relay.rustdesk.com', "$env:RELAY_SERVER" `
+            -replace 'rendezvous.rustdesk.com', "$env:RENDEZVOUS_SERVER" `
+            -replace 'pub_key: ".*"', "pub_key: `"$env:RS_PUB_KEY`"" | Set-Content src/hbb_common/config.rs
+          }
       - name: Build Sciter binary
         shell: bash
         run: |
@@ -266,7 +288,7 @@ jobs:
           mv ./usbmmidd_v2 ./Release || true
       - name: Upload unsigned artifact
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: actions/upload-artifact@v9
+        uses: actions/upload-artifact@v4
         with:
           name: rustdesk-unsigned-windows-x86
           path: Release
@@ -335,7 +357,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang cmake curl gcc-multilib git g++ g++-multilib libayatana-appindicator3-dev libasound2-dev libc6-dev libclang-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libpam0g-dev libpulse-dev libva-dev libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxdo-dev libxfixes-dev llvm-dev nasm ninja-build openjdk-17-jdk-headless pkg-config tree wget
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Install Flutter
@@ -369,10 +391,24 @@ jobs:
           fi
         shell: bash
       - name: Restore bridge
-        uses: actions/download-artifact@v9
+        uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
           path: ./
+      - name: 替换自定义服务器配置(Linux)
+        shell: bash
+        run: |
+          if [ -n "$API_SERVER" ]; then
+            sed -i "s|api\.rustdesk\.com|${API_SERVER}|g" flutter/lib/constants.dart
+            sed -i "s|relay\.rustdesk\.com|${RELAY_SERVER}|g" flutter/lib/constants.dart
+            sed -i "s|rendezvous\.rustdesk\.com|${RENDEZVOUS_SERVER}|g" flutter/lib/constants.dart
+            sed -i "s|RS_DEFAULT_PUB_KEY = \".*\"|RS_DEFAULT_PUB_KEY = \"${RS_PUB_KEY}\"|g" flutter/lib/constants.dart
+
+            sed -i "s|api\.rustdesk\.com|${API_SERVER}|g" src/hbb_common/config.rs
+            sed -i "s|relay\.rustdesk\.com|${RELAY_SERVER}|g" src/hbb_common/config.rs
+            sed -i "s|rendezvous\.rustdesk\.com|${RENDEZVOUS_SERVER}|g" src/hbb_common/config.rs
+            sed -i "s|pub_key: \".*\"|pub_key: \"${RS_PUB_KEY}\"|g" src/hbb_common/config.rs
+          fi
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -418,7 +454,7 @@ jobs:
           echo "ANDROID_SIGN_TOOL_VERSION=$BUILD_TOOL_VERSION" >> $GITHUB_ENV
       - name: Sign APK (存在密钥时)
         if: env.ANDROID_SIGNING_KEY != ''
-        uses: r0adkll/sign-android-release@v3
+        uses: r0adkll/sign-android-release@v1
         id: sign-rustdesk
         with:
           releaseDirectory: ./signed-apk
@@ -429,14 +465,14 @@ jobs:
         env:
           BUILD_TOOLS_VERSION: ${{ env.ANDROID_SIGN_TOOL_VERSION }}
       - name: Upload signed APK to Release
-        if: env.UPLOAD_ARTIFACT == 'true' && env.ANDROID_SIGNING_KEY != ''
+        if: env.ANDROID_SIGNING_KEY != '' && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
       - name: Upload unsigned APK to Release
-        if: env.UPLOAD_ARTIFACT == 'true' && env.ANDROID_SIGNING_KEY == ''
+        if: env.ANDROID_SIGNING_KEY == '' && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@v1
         with:
           prerelease: true
@@ -470,7 +506,7 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Fix Homebrew tap trust
@@ -510,7 +546,7 @@ jobs:
         run: |
           wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
           unzip nasm-2.16.03-macosx.zip
-          sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
+          sudo cp nasm-2.16.03/nasm /usr/local/bin
           nasm --version
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -525,7 +561,7 @@ jobs:
         shell: bash
         run: |
           cd "$(dirname "$(which flutter)")"
-          sed -i -e 's/_setFramesEnabled(false);/\/\/_setFramesEnabled(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
+          sed -i -e 's/_setFramesEnabledState(false);/\/\/_setFramesEnabledState(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -538,7 +574,7 @@ jobs:
         with:
           prefix-key: ${{ matrix.job.os }}
       - name: Restore bridge
-        uses: actions/download-artifact@v9
+        uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
           path: ./
@@ -554,6 +590,19 @@ jobs:
           if ! $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"; then
             find "${VCPKG_ROOT}/" -name "*.log" -exec cat {} \;
             exit 1
+      - name: 替换自定义服务器配置(Mac)
+        shell: bash
+        run: |
+          if [ -n "$API_SERVER" ]; then
+            sed -i "s|api\.rustdesk\.com|${API_SERVER}|g" flutter/lib/constants.dart
+            sed -i "s|relay\.rustdesk\.com|${RELAY_SERVER}|g" flutter/lib/constants.dart
+            sed -i "s|rendezvous\.rustdesk\.com|${RENDEZVOUS_SERVER}|g" flutter/lib/constants.dart
+            sed -i "s|RS_DEFAULT_PUB_KEY = \".*\"|RS_DEFAULT_PUB_KEY = \"${RS_PUB_KEY}\"|g" flutter/lib/constants.dart
+
+            sed -i "s|api\.rustdesk\.com|${API_SERVER}|g" src/hbb_common/config.rs
+            sed -i "s|relay\.rustdesk\.com|${RELAY_SERVER}|g" src/hbb_common/config.rs
+            sed -i "s|rendezvous\.rustdesk\.com|${RENDEZVOUS_SERVER}|g" src/hbb_common/config.rs
+            sed -i "s|pub_key: \".*\"|pub_key: \"${RS_PUB_KEY}\"|g" src/hbb_common/config.rs
           fi
       - name: Build RustDesk
         run: |
@@ -573,7 +622,7 @@ jobs:
           CREATE_DMG=$(command -v create-dmg)
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
           create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
-      - name: Codesign & Notarize DMG（存在证书）
+      - name: Codesign & Notarize DMG（有证书）
         if: env.MACOS_P12_BASE64 != '' && env.UPLOAD_ARTIFACT == 'true'
         run: |
           CREATE_DMG=$(command -v create-dmg)
