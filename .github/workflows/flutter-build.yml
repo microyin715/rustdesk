@@ -84,7 +84,7 @@ jobs:
         if: ${{ matrix.job.arch == 'aarch64' }}
         run: |
           $flutterRoot = "${{ steps.flutter.outputs['CACHE-PATH'] }}"
-          Remove-Item -Force "$flutterRoot\bin\cache\engine-dart-sdk.stamp" -ErrorAction SilentlyContinue
+          Remove-Item -Force "$flutterRoot\bin\cache\engine-dart.sdk.stamp" -ErrorAction SilentlyContinue
           & "$flutterRoot\bin\internal\update_dart_sdk.ps1"
           $dartVer = & "$flutterRoot\bin\dart.bat" --version 2>&1 | Out-String
           if ($dartVer -notmatch "windows_arm64") { Write-Error "Wrong dart arch"; exit 1 }
@@ -189,10 +189,10 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          target: i686-pc-windows-msvc
-          os: windows-2022
-          arch: x86
-          vcpkg-triplet: x86-windows-static
+          - target: i686-pc-windows-msvc
+            os: windows-2022
+            arch: x86
+            vcpkg-triplet: x86-windows-static
     steps:
       - name: Export Actions cache env
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
@@ -290,11 +290,11 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          arch: aarch64
-          target: aarch64-linux-android
-          os: ubuntu-24.04
-          reltype: release
-          suffix: ""
+          - arch: aarch64
+            target: aarch64-linux-android
+            os: ubuntu-24.04
+            reltype: release
+            suffix: ""
     steps:
       - name: Free disk
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
@@ -548,7 +548,7 @@ jobs:
         if: env.MACOS_P12_BASE64 != null && env.UPLOAD_ARTIFACT == 'true'
         run: |
           CREATE_DMG=$(command -v create-dmg)
-          sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS/' "$CREATE_DMG"
+          sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
           security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} rustdesk.keychain
           rm -rf *.dmg
           codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
