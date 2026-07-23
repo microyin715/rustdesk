@@ -1,34 +1,14 @@
 name: Build RustDesk Minimal Windows/Android/Mac
 on:
+  # 仅保留手动触发，如需推送自动编译可取消下方push注释
   workflow_dispatch:
-    inputs:
-      upload-artifact:
-        type: boolean
-        default: true
-        description: "编译完成后上传文件到Release"
-      upload-tag:
-        type: string
-        default: "nightly"
-        description: "Release标签名称"
-      # 自定义服务端变量
-      API_SERVER:
-        type: string
-        default: ""
-        description: "自定义API服务器地址"
-      RELAY_SERVER:
-        type: string
-        default: ""
-        description: "自定义中继服务器地址"
-      RENDEZVOUS_SERVER:
-        type: string
-        default: ""
-        description: "自定义 rendezvous 服务器地址"
-      RS_PUB_KEY:
-        type: string
-        default: ""
-        description: "服务器公钥"
+# push:
+#   branches: [ main ]
 
+# 全局环境：自动读取仓库Secrets & Variables，Node24兼容、mac tap兼容
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
   SCITER_RUST_VERSION: "1.75"
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
@@ -40,21 +20,31 @@ env:
   ANDROID_FLUTTER_VERSION: "3.24.5"
   FLUTTER_WINDOWS_ARM_VERSION: "3.44.0"
   FLUTTER_ELINUX_VERSION: "3.16.9"
-  TAG_NAME: "${{ github.event.inputs.upload-tag || 'nightly' }}"
+  TAG_NAME: "nightly"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   ARMV7_VCPKG_COMMIT_ID: "6f29f12e82a8293156836ad81cc9bf5af41fe836"
   VERSION: "1.4.9"
   NDK_VERSION: "r28c"
-  ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
-  MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
-  UPLOAD_ARTIFACT: "${{ github.event.inputs.upload-artifact == 'true' }}"
-  SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
-  # 注入用户自定义服务器变量，全局可用
-  API_SERVER: "${{ github.event.inputs.API_SERVER }}"
-  RELAY_SERVER: "${{ github.event.inputs.RELAY_SERVER }}"
-  RENDEZVOUS_SERVER: "${{ github.event.inputs.RENDEZVOUS_SERVER }}"
-  RS_PUB_KEY: "${{ github.event.inputs.RS_PUB_KEY }}"
+  # ========== 仓库配置自动加载变量（Settings-Actions Variables/Secrets）==========
+  # 签名密钥类（Secrets分类存储）
+  ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+  ANDROID_ALIAS: ${{ secrets.ANDROID_ALIAS }}
+  ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_SIGN_KEY_PASSWORD }}
+  MACOS_P12_BASE64: ${{ secrets.MACOS_P12_BASE64 }}
+  MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
+  MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+  MACOS_NOTARIZE_JSON: ${{ secrets.MACOS_NOTARIZE_JSON }}
+  SIGN_BASE_URL: ${{ secrets.SIGN_BASE_URL }}
+  SIGN_SECRET_KEY: ${{ secrets.SIGN_SECRET_KEY }}
+  # 自定义服务器公共变量（Variables分类存储）
+  API_SERVER: ${{ vars.API_SERVER }}
+  RELAY_SERVER: ${{ vars.RELAY_SERVER }}
+  RENDEZVOUS_SERVER: ${{ vars.RENDEZVOUS_SERVER }}
+  RS_PUB_KEY: ${{ vars.RS_PUB_KEY }}
+  # 编译控制开关（可在仓库Variables修改true/false）
+  UPLOAD_ARTIFACT: ${{ vars.UPLOAD_ARTIFACT != 'false' }}
 
 jobs:
   generate-bridge:
@@ -77,27 +67,27 @@ jobs:
             build-args: ""
     steps:
       - name: Export Actions cache env
-        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Restore bridge artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@v9
         with:
           name: bridge-artifact-flutter-3.44
           path: ./
       - name: Install LLVM
-        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+        uses: KyleMayes/install-llvm-action@v2.0.9
         with:
           version: ${{ env.LLVM_VERSION }}
       - name: Install Flutter
         id: flutter
-        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225
+        uses: subosito/flutter-action@v2.12.0
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_WINDOWS_ARM_VERSION }}
@@ -117,16 +107,19 @@ jobs:
         shell: bash
         run: bash .github/patches/apply_flutter_3.44_source_patches.sh
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.SCITER_RUST_VERSION }}
           targets: ${{ matrix.job.target }}
           components: rustfmt
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Rust Cache (缓存失败不中断)
+        uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           prefix-key: ${{ matrix.job.os }}
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        uses: lukka/run-vcpkg@v11
+        continue-on-error: true
         with:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
@@ -147,23 +140,23 @@ jobs:
         run: |
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
           mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
-          Invoke-WebRequest https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
           Expand-Archive usbmmidd_v2.zip .
           Remove-Item usbmmidd_v2\Win32 -Recurse
-          Remove-Item "usbmmidd_v2\deviceinstaller.exe","usbmmidd.bat"
+          Remove-Item "usbmmidd_v2\deviceinstaller.exe","usbmmidd_v2\usbmmidd.bat"
           mv -Force .\usbmmidd_v2 ./rustdesk
       - name: Upload unsigned artifact
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@v9
         with:
           name: rustdesk-unsigned-windows-aarch64
           path: rustdesk
       - name: Sign binary
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
           pip3 install requests argparse
-          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./rustdesk/
+          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ env.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./rustdesk/
       - name: Build self-extracting exe
         shell: bash
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -171,12 +164,12 @@ jobs:
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk.exe
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
+        uses: microsoft/setup-msbuild@v2
       - name: Build MSI
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
@@ -188,13 +181,13 @@ jobs:
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
           mv $msi.FullName ../../SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.msi
       - name: Sign MSI & exe
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
-          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
+          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ env.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
       - name: Upload to Release
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -217,13 +210,13 @@ jobs:
             vcpkg-triplet: x86-windows-static
     steps:
       - name: Export Actions cache env
-        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Install 32bit LLVM
@@ -231,16 +224,19 @@ jobs:
         with:
           version: ${{ env.LLVM_VERSION }}
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: nightly-2023-10-13-${{ matrix.job.target }}
           targets: ${{ matrix.job.target }}
           components: rustfmt
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           prefix-key: ${{ matrix.job.os }}-sciter
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        uses: lukka/run-vcpkg@v11
+        continue-on-error: true
         with:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
@@ -270,16 +266,16 @@ jobs:
           mv ./usbmmidd_v2 ./Release || true
       - name: Upload unsigned artifact
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@v9
         with:
           name: rustdesk-unsigned-windows-x86
           path: Release
       - name: Sign files
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
           pip3 install requests argparse
-          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./Release/
+          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ env.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./Release/
       - name: Build self-extracting exe
         shell: bash
         run: |
@@ -291,13 +287,13 @@ jobs:
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
       - name: Sign packed exe
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
-          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput/
+          BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ env.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput/
       - name: Upload to Release
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -319,7 +315,7 @@ jobs:
             suffix: ""
     steps:
       - name: Free disk
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: false
           android: false
@@ -329,7 +325,7 @@ jobs:
           docker-images: true
           swap-storage: false
       - name: Export cache env
-        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
@@ -339,49 +335,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang cmake curl gcc-multilib git g++ g++-multilib libayatana-appindicator3-dev libasound2-dev libc6-dev libclang-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libpam0g-dev libpulse-dev libva-dev libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxdo-dev libxfixes-dev llvm-dev nasm ninja-build openjdk-17-jdk-headless pkg-config tree wget
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v5
         with:
           submodules: recursive
       - name: Install Flutter
-        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
       - name: Patch Flutter dropdown
         run: |
-          cd $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(which flutter))/..
           [[ "3.24.5" == ${{env.ANDROID_FLUTTER_VERSION}} ]] && git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
       - name: Setup NDK
-        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        uses: lukka/run-vcpkg@v11
+        continue-on-error: true
         with:
           vcpkgDirectory: /opt/artifacts/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
       - name: Build Android vcpkg deps
         run: |
-          ANDROID_TARGET=arm64
+          ANDROID_TARGET=arm64-v8a
           if ! ./flutter/build_android_deps.sh "${ANDROID_TARGET}"; then
             find "${VCPKG_ROOT}/" -name "*.log" -exec cat {} \;
             exit 1
           fi
         shell: bash
       - name: Restore bridge
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@v9
         with:
           name: bridge-artifact
           path: ./
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           prefix-key: rustdesk-lib-cache-android
           key: ${{ matrix.job.target }}
@@ -417,28 +416,28 @@ jobs:
         run: |
           BUILD_TOOL_VERSION=$(ls /usr/local/lib/android/sdk/build-tools/ | tail -n 1)
           echo "ANDROID_SIGN_TOOL_VERSION=$BUILD_TOOL_VERSION" >> $GITHUB_ENV
-      - name: Sign APK (有密钥时)
-        if: env.ANDROID_SIGNING_KEY != null
-        uses: r0adkll/sign-android-release@349ebdef58775b1e0d8099458af0816dc79b6407
+      - name: Sign APK (存在密钥时)
+        if: env.ANDROID_SIGNING_KEY != ''
+        uses: r0adkll/sign-android-release@v3
         id: sign-rustdesk
         with:
           releaseDirectory: ./signed-apk
-          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
-          alias: ${{ secrets.ANDROID_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          signingKeyBase64: ${{ env.ANDROID_SIGNING_KEY }}
+          alias: ${{ env.ANDROID_ALIAS }}
+          keyStorePassword: ${{ env.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ env.ANDROID_KEY_PASSWORD }}
         env:
           BUILD_TOOLS_VERSION: ${{ env.ANDROID_SIGN_TOOL_VERSION }}
       - name: Upload signed APK to Release
-        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        if: env.UPLOAD_ARTIFACT == 'true' && env.ANDROID_SIGNING_KEY != ''
+        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
       - name: Upload unsigned APK to Release
-        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        if: env.UPLOAD_ARTIFACT == 'true' && env.ANDROID_SIGNING_KEY == ''
+        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
@@ -465,35 +464,37 @@ jobs:
             vcpkg-triplet: arm64-osx
     steps:
       - name: Export cache env
-        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: Fix Homebrew tap trust
+        run: echo "export HOMEBREW_NO_REQUIRE_TAP_TRUST=1" >> ~/.zshrc && source ~/.zshrc
       - name: Import signing cert
-        if: env.MACOS_P12_BASE64 != null
-        uses: apple-actions/import-codesign-certs@253ddeeac23f2bdad1646faac5c8c2832e800071
+        if: env.MACOS_P12_BASE64 != ''
+        uses: apple-actions/import-codesign-certs@v1
         with:
-          p12-file-base64: ${{ secrets.MACOS_P12_BASE64 }}
-          p12-password: ${{ secrets.MACOS_P12_PASSWORD }}
+          p12-file-base64: ${{ env.MACOS_P12_BASE64 }}
+          p12-password: ${{ env.MACOS_P12_PASSWORD }}
           keychain: rustdesk
       - name: Unlock keychain
-        if: env.MACOS_P12_BASE64 != null
+        if: env.MACOS_P12_BASE64 != ''
         run: |
           security default-keychain -s rustdesk.keychain
           security find-identity -v
       - name: Import notarize config
-        if: env.MACOS_P12_BASE64 != null
-        uses: timheuer/base64-to-file@adaa40c0c581f276132199d4cf60afa07ce60eac
+        if: env.MACOS_P12_BASE64 != ''
+        uses: timheuer/base64-to-file@v1.2
         with:
           fileName: rustdesk.json
-          encodedString: ${{ secrets.MACOS_NOTARIZE_JSON }}
+          encodedString: ${{ env.MACOS_NOTARIZE_JSON }}
       - name: Install rcodesign
-        if: env.MACOS_P12_BASE64 != null
+        if: env.MACOS_P12_BASE64 != ''
         shell: bash
         run: |
           pushd /tmp
@@ -512,36 +513,40 @@ jobs:
           sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
           nasm --version
       - name: Install Flutter
-        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
       - name: Patch Flutter dropdown
         run: |
-          cd $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(which flutter))/..
           [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]] && git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
       - name: Fix Flutter frame bug
         shell: bash
         run: |
           cd "$(dirname "$(which flutter)")"
-          sed -i -e 's/_setFramesEnabledState(false);/\/\/_setFramesEnabledState(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
+          sed -i -e 's/_setFramesEnabled(false);/\/\/_setFramesEnabled(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.MAC_RUST_VERSION }}
           targets: ${{ matrix.job.target }}
           components: rustfmt
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           prefix-key: ${{ matrix.job.os }}
       - name: Restore bridge
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@v9
         with:
           name: bridge-artifact
           path: ./
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        uses: lukka/run-vcpkg@v11
+        continue-on-error: true
         with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
       - name: Install vcpkg libs
@@ -552,6 +557,8 @@ jobs:
           fi
       - name: Build RustDesk
         run: |
+          export CFLAGS="-Wno-deprecated-declarations -Wno-unguarded-availability-new"
+          export CXXFLAGS="-Wno-deprecated-declarations -Wno-unguarded-availability-new"
           if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
             MIN_MACOS_VERSION="12.3"
             sed -i -e "s/MACOSX_DEPLOYMENT_TARGET\=[0-9]*.[0-9]*/MACOSX_DEPLOYMENT_TARGET=${MIN_MACOS_VERSION}/" build.py
@@ -566,21 +573,21 @@ jobs:
           CREATE_DMG=$(command -v create-dmg)
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
           create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
-      - name: Codesign & Notarize DMG（有证书）
-        if: env.MACOS_P12_BASE64 != null && env.UPLOAD_ARTIFACT == 'true'
+      - name: Codesign & Notarize DMG（存在证书）
+        if: env.MACOS_P12_BASE64 != '' && env.UPLOAD_ARTIFACT == 'true'
         run: |
           CREATE_DMG=$(command -v create-dmg)
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
-          security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} rustdesk.keychain
+          security unlock-keychain -p ${{ env.MACOS_P12_PASSWORD }} rustdesk.keychain
           rm -rf *.dmg
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
+          codesign --force --options runtime -s ${{ env.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
           create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
+          codesign --force --options runtime -s ${{ env.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
           rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json --staple rustdesk-${{ env.VERSION }}.dmg
           mv rustdesk-${{ env.VERSION }}.dmg rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg
       - name: Upload DMG to Release
         if: env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
