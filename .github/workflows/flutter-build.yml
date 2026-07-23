@@ -10,6 +10,23 @@ on:
         type: string
         default: "nightly"
         description: "Release标签名称"
+      # 自定义服务端变量
+      API_SERVER:
+        type: string
+        default: ""
+        description: "自定义API服务器地址"
+      RELAY_SERVER:
+        type: string
+        default: ""
+        description: "自定义中继服务器地址"
+      RENDEZVOUS_SERVER:
+        type: string
+        default: ""
+        description: "自定义 rendezvous 服务器地址"
+      RS_PUB_KEY:
+        type: string
+        default: ""
+        description: "服务器公钥"
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -33,6 +50,11 @@ env:
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   UPLOAD_ARTIFACT: "${{ github.event.inputs.upload-artifact == 'true' }}"
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
+  # 注入用户自定义服务器变量，全局可用
+  API_SERVER: "${{ github.event.inputs.API_SERVER }}"
+  RELAY_SERVER: "${{ github.event.inputs.RELAY_SERVER }}"
+  RENDEZVOUS_SERVER: "${{ github.event.inputs.RENDEZVOUS_SERVER }}"
+  RS_PUB_KEY: "${{ github.event.inputs.RS_PUB_KEY }}"
 
 jobs:
   generate-bridge:
@@ -84,7 +106,7 @@ jobs:
         if: ${{ matrix.job.arch == 'aarch64' }}
         run: |
           $flutterRoot = "${{ steps.flutter.outputs['CACHE-PATH'] }}"
-          Remove-Item -Force "$flutterRoot\bin\cache\engine-dart.sdk.stamp" -ErrorAction SilentlyContinue
+          Remove-Item -Force "$flutterRoot\bin\cache\engine-dart-sdk.stamp" -ErrorAction SilentlyContinue
           & "$flutterRoot\bin\internal\update_dart_sdk.ps1"
           $dartVer = & "$flutterRoot\bin\dart.bat" --version 2>&1 | Out-String
           if ($dartVer -notmatch "windows_arm64") { Write-Error "Wrong dart arch"; exit 1 }
@@ -128,7 +150,7 @@ jobs:
           Invoke-WebRequest https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
           Expand-Archive usbmmidd_v2.zip .
           Remove-Item usbmmidd_v2\Win32 -Recurse
-          Remove-Item "usbmmidd_v2\deviceinstaller.exe","usbmmidd_v2\usbmmidd.bat"
+          Remove-Item "usbmmidd_v2\deviceinstaller.exe","usbmmidd.bat"
           mv -Force .\usbmmidd_v2 ./rustdesk
       - name: Upload unsigned artifact
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -244,7 +266,7 @@ jobs:
           curl -LJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
           curl -LJ -o usbmmidd_v2.zip https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip
           unzip usbmmidd_v2.zip
-          rm -rf ./usbmmidd_v2/deviceinstaller.exe ./usbmmidd_v2/usbmmidd.bat
+          rm -rf ./usbmmidd_v2/deviceinstaller.exe ./usbmmidd.bat
           mv ./usbmmidd_v2 ./Release || true
       - name: Upload unsigned artifact
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -343,7 +365,7 @@ jobs:
           doNotCache: false
       - name: Build Android vcpkg deps
         run: |
-          ANDROID_TARGET=arm64-v8a
+          ANDROID_TARGET=arm64
           if ! ./flutter/build_android_deps.sh "${ANDROID_TARGET}"; then
             find "${VCPKG_ROOT}/" -name "*.log" -exec cat {} \;
             exit 1
