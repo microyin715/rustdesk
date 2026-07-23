@@ -7,41 +7,49 @@ jobs:
   build-windows:
     runs-on: windows-2022
     steps:
-      # 1. 关键修复：拉取代码并递归拉取所有 Git 子模块 (submodules)
+      # 1. 递归拉取代码和所有 Git 子模块
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. 配置 Rust 环境
+      # 2. 安装 LLVM/Clang (RustDesk 绑定代码依赖 libclang)
+      - name: Install LLVM
+        run: |
+          choco install llvm -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      # 3. 配置 Rust 环境
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      # 3. 注入你的自建服务器配置
+      # 4. 注入你的自建服务器配置
       - name: Set Custom Server Environments
         run: |
           echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $env:GITHUB_ENV
           echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $env:GITHUB_ENV
 
-      # 4. 设置 Flutter 环境
+      # 5. 设置 Flutter 环境
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      # 5. 配置 vcpkg（RustDesk 的 C/C++ 依赖，如 libvpx, opus）
+      # 6. 利用 GitHub 缓存优化 vcpkg 编译速度
       - name: Setup vcpkg
         run: |
           $env:VCPKG_ROOT = "$env:RUNNER_WORKSPACE\vcpkg"
-          git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat"
+          if (!(Test-Path $env:VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat"
+          }
           & "$env:VCPKG_ROOT\vcpkg.exe" install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
           echo "VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
 
-      # 6. 生成代码绑定并获取 Flutter 依赖
-      - name: Prepare Flutter and Rust Bridge
+      # 7. 获取 Flutter 依赖并生成代码
+      - name: Prepare Flutter and Bridge
         run: |
           cargo install flutter_rust_bridge_codegen --version 1.80.1
           cd flutter
@@ -49,12 +57,12 @@ jobs:
           flutter_rust_bridge_codegen --rust-input ..\src\flutter_ffi.rs --dart-output .\lib\generated_bridge.dart
           cd ..
 
-      # 7. 编译打包应用
+      # 8. 执行最终编译打包
       - name: Build Windows Executable
         run: |
           cargo build --release --features flutter
 
-      # 8. 上传产物
+      # 9. 导出产物
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
